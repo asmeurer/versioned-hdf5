@@ -19,25 +19,26 @@ import numpy as np
 from collections import defaultdict
 import posixpath as pp
 import warnings
-from weakref import WeakValueDictionary
 
 from .backend import DEFAULT_CHUNK_SIZE
 from .slicetools import spaceid_to_slice
 
-_groups = WeakValueDictionary({})
 class InMemoryGroup(Group):
-    def __new__(cls, bind, _committed=False):
+    def __new__(cls, bind, _committed=False, _groups=None):
         # Make sure each group only corresponds to one InMemoryGroup instance.
         # Otherwise a new instance would lose track of any datasets or
         # subgroups created in the old one.
+        if _groups is None:
+            _groups = {}
         if bind in _groups:
             return _groups[bind]
         obj = super().__new__(cls)
         obj._initialized = False
         _groups[bind] = obj
+        obj._groups = _groups
         return obj
 
-    def __init__(self, bind, _committed=False):
+    def __init__(self, bind, _committed=False, _groups=None):
         if self._initialized:
             return
         self._data = {}
@@ -106,7 +107,7 @@ class InMemoryGroup(Group):
         if isinstance(obj, Dataset):
             self._data[name] = InMemoryDataset(obj.id, parent=self)
         elif isinstance(obj, Group):
-            self._subgroups[name] = InMemoryGroup(obj.id)
+            self._subgroups[name] = InMemoryGroup(obj.id, _groups=self._groups)
         elif isinstance(obj, InMemoryGroup):
             self._subgroups[name] = obj
         elif isinstance(obj, (InMemoryArrayDataset, InMemorySparseDataset)):
@@ -148,8 +149,8 @@ class InMemoryGroup(Group):
         self._check_committed()
         if name.startswith('/'):
             raise ValueError("Root level groups cannot be created inside of versioned groups")
-        group = type(self)(
-            super().create_group(name, track_order=track_order).id)
+        group = InMemoryGroup(
+            super().create_group(name, track_order=track_order).id, _groups=self._groups)
         g = group
         n = name
         while n:
@@ -157,7 +158,7 @@ class InMemoryGroup(Group):
             if not dirname:
                 parent = self
             else:
-                parent = type(self)(g.parent.id)
+                parent = type(self)(g.parent.id, _groups=self._groups)
             parent._subgroups[basename] = g
             g.parent = parent
             g = parent
